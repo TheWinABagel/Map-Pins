@@ -1,13 +1,13 @@
-package com.example;
+package dev.bagel;
 
 import net.runelite.client.RuneLite;
 import net.runelite.client.externalplugins.ExternalPluginManager;
 
-public class ExamplePluginTest
+public class MapPinsPluginTest
 {
 	public static void main(String[] args) throws Exception
 	{
-		ExternalPluginManager.loadBuiltin(ExamplePlugin.class);
+		ExternalPluginManager.loadBuiltin(MapPinsPlugin.class);
 		RuneLite.main(args);
 	}
 }
