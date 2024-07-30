@@ -14,6 +14,7 @@ import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.Point;
+import net.runelite.api.coords.WorldArea;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.MenuOpened;
@@ -34,9 +35,12 @@ import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
 
 import javax.inject.Inject;
 import java.awt.*;
+import java.awt.geom.Area;
 import java.awt.image.BufferedImage;
+import java.lang.reflect.Field;
 import java.util.List;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -60,7 +64,7 @@ public class MapPinsPlugin extends Plugin {
     @Inject
     private ConfigManager configManager;
     @Inject
-    private WorldMapOverlay worldMapOverlay;
+    WorldMapOverlay worldMapOverlay;
     @Inject
     private Gson gson;
     @Inject
@@ -168,11 +172,8 @@ public class MapPinsPlugin extends Plugin {
         }
 
         return points.stream()
-                .map(point -> new Pin(
-                        WorldPoint.fromRegion(point.getRegionId(), point.getRegionX(), point.getRegionY(), point.getZ()),
-                        config.pinStyle(), point.getColor(), point.getLabel()))
-                .flatMap(pin ->
-                {
+                .map(point -> new Pin(point.toWorldPoint(), config.pinStyle(), point.getColor(), point.getLabel()))
+                .flatMap(pin -> {
                     Collection<WorldPoint> localWorldPoints = WorldPoint.toLocalInstance(client.getTopLevelWorldView(), pin.getPoint());
                     return localWorldPoints.stream().map(wp -> new Pin(wp, pin.getStyle(), pin.getColor(), pin.getLabel()));
                 })
@@ -182,19 +183,12 @@ public class MapPinsPlugin extends Plugin {
     @Override
     public void startUp() {
         overlayManager.add(minimapOverlay);
-/*        if (config.showImportExport()) {
-            sharingManager.addImportExportMenuOptions();
-            sharingManager.addClearMenuOption();
-        }*/
         loadPoints();
-//        eventBus.register(sharingManager);
     }
 
     @Override
     public void shutDown() {
-//        eventBus.unregister(sharingManager);
         overlayManager.remove(minimapOverlay);
-//        sharingManager.removeMenuOptions();
         points.clear();
     }
 
@@ -221,12 +215,13 @@ public class MapPinsPlugin extends Plugin {
             return;
         }
 
-        WorldPoint worldPoint = calculateMapPoint(client.getMouseCanvasPosition());
 
-        final int regionId = worldPoint.getRegionID();
+        WorldPoint clickedWorldPoint = calculateMapPoint(client.getMouseCanvasPosition());
+
+        final int regionId = clickedWorldPoint.getRegionID();
         Collection<PinPoint> regionPoints = getPoints(regionId);
         Optional<PinPoint> existingOpt = regionPoints.stream()
-                .filter(p -> p.doesWorldPointMatch(worldPoint))
+                .filter(p -> pointContainsCursor(clickedWorldPoint, p.getStyle().getImage()))
                 .findFirst();
 
 
@@ -237,27 +232,27 @@ public class MapPinsPlugin extends Plugin {
 //                        markTile(existingOpt.get().toWorldPoint());
 //                        log.info("removing a pin at x: {}, y: {}, with region id {}!", worldPoint.getRegionX(), worldPoint.getRegionY(), worldPoint.getRegionID());
 //                    } else {
-                    createPin(worldPoint);
-//                    markTile(worldPoint);
-                    log.info("added a new pin at x: {}, y: {}, with region id {}!", worldPoint.getX(), worldPoint.getY(), worldPoint.getRegionID());
+
+                    createPin(clickedWorldPoint);
+//                    log.info("added a new pin at x: {}, y: {}, with region id {}!", worldPoint.getX(), worldPoint.getY(), worldPoint.getRegionID());
 //                    }
                 });
 
         for (MenuEntry entry : event.getMenuEntries()) {
             if (entry.getTarget().contains("Pin")) {
 
+
                 client.createMenuEntry(0)
-                        .setOption("Remove da pin: ")
+                        .setOption("Remove pin: ")
                         .setTarget(entry.getTarget())
                         .onClick(e -> {
                             if (existingOpt.isPresent()) {
-                                log.warn("Calling remove pin");
-                                removePin(existingOpt.get().toWorldPoint());
+                                log.warn("Calling remove pin on {}", existingOpt.get());
+                                removePin(existingOpt.get().toWorldPoint(), clickedWorldPoint);
                             }
                             else {
                                 log.error("Cannot remove pin as it does not exist in the area");
                             }
-
 //                                    markTile(worldPoint);
    /*                                 if (markers.containsKey(pinOwner)) {
                                         worldMapPointManager.removeIf(x -> x == markers.get(pinOwner));
@@ -265,8 +260,48 @@ public class MapPinsPlugin extends Plugin {
                                     }*/
                                 }
                         );
+                client.createMenuEntry(1)
+                        .setOption("Rename Pin: ")
+                        .setTarget(entry.getTarget())
+                        .onClick(e -> {
+                            if (existingOpt.isPresent()) {
+                                labelPin(existingOpt.get(), clickedWorldPoint);
+                            }
+                            else {
+                                log.error("Cannot label pin as it does not exist in the area!");
+                            }
+
+                        });
             }
         }
+    }
+
+    private boolean pointContainsCursor(WorldPoint point, BufferedImage image/*, Point imagePoint*/) {
+        Widget widget = client.getWidget(ComponentID.WORLD_MAP_MAPVIEW);
+        if (widget == null) {
+            return false;
+        }
+        Point mousePos = client.getMouseCanvasPosition();
+        if (!getWorldMapClipArea(widget.getBounds()).contains(mousePos.getX(), mousePos.getY())) {
+            mousePos = null;
+        }
+        Point drawPoint = worldMapOverlay.mapWorldPointToGraphicsPoint(point);
+        int drawX = drawPoint.getX();
+        int drawY = drawPoint.getY();
+
+//        if (imagePoint == null) {
+            drawX -= image.getWidth() / 2;
+            drawY -= image.getHeight() / 2;
+//        } else {
+//            drawX -= imagePoint.getX();
+//            drawY -= imagePoint.getY();
+//        }
+
+        Rectangle clickbox = new Rectangle(drawX, drawY, image.getWidth(), image.getHeight());
+        if (mousePos != null && clickbox.contains(mousePos.getX(), mousePos.getY())) {
+            return true;
+        }
+        return false;
     }
 
     private WorldPoint calculateMapPoint(Point point) {
@@ -278,6 +313,35 @@ public class MapPinsPlugin extends Plugin {
         int dy = (int) ((-(point.getY() - middle.getY())) / zoom);
 
         return mapPoint.dx(dx).dy(dy);
+    }
+
+    /**
+     * Gets a clip area which excludes the area of widgets which overlay the world map.
+     *
+     * @param baseRectangle The base area to clip from
+     * @return An {@link Area} representing <code>baseRectangle</code>, with the area
+     * of visible widgets overlaying the world map clipped from it.
+     */
+    private Shape getWorldMapClipArea(Rectangle baseRectangle) {
+        final Widget overview = client.getWidget(ComponentID.WORLD_MAP_OVERVIEW_MAP);
+        final Widget surfaceSelector = client.getWidget(ComponentID.WORLD_MAP_SURFACE_SELECTOR);
+
+        Area clipArea = new Area(baseRectangle);
+        boolean subtracted = false;
+
+        if (overview != null && !overview.isHidden()) {
+            clipArea.subtract(new Area(overview.getBounds()));
+            subtracted = true;
+        }
+
+        if (surfaceSelector != null && !surfaceSelector.isHidden()) {
+            clipArea.subtract(new Area(surfaceSelector.getBounds()));
+            subtracted = true;
+        }
+
+        // The sun g2d implementation is much more efficient at applying clips which are subclasses of rectangle2d,
+        // so use that as the clip shape if possible
+        return subtracted ? clipArea : baseRectangle;
     }
 
     @Provides
@@ -295,6 +359,7 @@ public class MapPinsPlugin extends Plugin {
         log.debug("Updating point: {} - {}", point, worldPoint);
 
         PinWorldMapPoint marker = new PinWorldMapPoint(point/*, changeColor(config.pinStyle().getImage(), config.pinColor())*/);
+        marker.setName("Pin");
 
         List<PinPoint> groundMarkerPoints = new ArrayList<>(getPoints(regionId));
 
@@ -310,29 +375,32 @@ public class MapPinsPlugin extends Plugin {
         loadPoints();
     }
 
-    private void removePin(WorldPoint worldPoint) {
-        if (worldPoint == null) {
+    private void removePin(WorldPoint removedWorldPoint, WorldPoint clickedWorldPoint) {
+        if (removedWorldPoint == null || clickedWorldPoint == null) {
             return;
         }
-        int regionId = worldPoint.getRegionID();
+        int regionId = removedWorldPoint.getRegionID();
 
-        PinPoint pinPoint = new PinPoint(regionId, worldPoint, config.pinStyle(), config.pinColor(), null);
-        log.debug("Updating point: {} - {}", pinPoint, worldPoint);
+        PinPoint pinPoint = new PinPoint(regionId, removedWorldPoint, config.pinStyle(), config.pinColor(), null);
+        log.debug("Updating point: {} - {}", pinPoint, removedWorldPoint);
 
         PinWorldMapPoint marker = new PinWorldMapPoint(pinPoint);
+        marker.setName("Pin");
 
         List<PinPoint> groundMarkerPoints = new ArrayList<>(getPoints(regionId));
 
-
+//        AtomicBoolean firstFound = new AtomicBoolean(false);
         worldMapPointManager.removeIf(worldMapPoint -> {
-            boolean test = pinPoint.doesWorldPointMatch(worldMapPoint.getWorldPoint());
+//            if (firstFound.get()) return false;
+            log.warn("world map zoom currently is {}", client.getWorldMap().getWorldMapZoom());
+            boolean test = worldMapPoint instanceof PinWorldMapPoint && clickedWorldPoint.distanceTo2D(worldMapPoint.getWorldPoint()) <(int) ((pinPoint.getStyle().getY())/ client.getWorldMap().getWorldMapZoom() );/*pinPoint.doesWorldPointMatch(worldMapPoint.getWorldPoint());*/
             if (test) {
                 log.warn("sucessfully removing marker: {}, world map point {}", marker, worldMapPoint.getWorldPoint());
+//                firstFound.set(true);
             }
             return test;
         });
         groundMarkerPoints.remove(pinPoint);
-//        log.info("marker being removed: {} ", marker);
 
         savePoints(regionId, groundMarkerPoints);
 
@@ -384,7 +452,10 @@ public class MapPinsPlugin extends Plugin {
         loadPoints();
     }
 
-    private void labelPin(PinPoint existing) {
+    private void labelPin(PinPoint existing, WorldPoint clickedWorldPoint) {
+        if (clickedWorldPoint == null) {
+            return;
+        }
         chatboxPanelManager.openTextInput("Pin label")
                 .value(Optional.ofNullable(existing.getLabel()).orElse(""))
                 .onDone((input) ->
@@ -393,6 +464,12 @@ public class MapPinsPlugin extends Plugin {
 
                     PinPoint newPoint = new PinPoint(existing.getRegionId(), existing.toWorldPoint(), existing.getStyle(), existing.getColor(), input);
                     Collection<PinPoint> points = new ArrayList<>(getPoints(existing.getRegionId()));
+                    worldMapPointManager.removeIf(worldMapPoint -> {
+                        return worldMapPoint instanceof PinWorldMapPoint && clickedWorldPoint.distanceTo2D(worldMapPoint.getWorldPoint()) < (int) ((existing.getStyle().getY())/ client.getWorldMap().getWorldMapZoom() );
+                    });
+                    var test = new PinWorldMapPoint(newPoint);
+                    test.setName(input);
+                    worldMapPointManager.add(test);
                     points.remove(existing);
                     points.add(newPoint);
                     savePoints(existing.getRegionId(), points);

@@ -41,12 +41,6 @@ public class PinPoint {
         this.label = label;
     }
 
-    public boolean doesWorldPointMatch(WorldPoint worldPoint) {
-        WorldArea thisPos = new WorldArea(x, y, style.getX(), style.getY(), z);
-        WorldArea otherPos = new WorldArea(worldPoint.getX(), worldPoint.getY(), 5, 5, worldPoint.getPlane());
-        return thisPos.intersectsWith(otherPos);
-    }
-
     public WorldPoint toWorldPoint() {
         return new WorldPoint(x, y, z);
     }
