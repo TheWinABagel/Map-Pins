@@ -1,6 +1,6 @@
 package dev.bagel;
 
-import dev.bagel.pins.Pin;
+import dev.bagel.pins.Style;
 import net.runelite.client.config.Alpha;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
@@ -35,8 +35,8 @@ public interface MapPinsConfig extends Config {
             name = "Default pin style",
             description = "Configures the default size and style for pins."
     )
-    default Pin.Style pinStyle() {
-        return Pin.Style.SMALL;
+    default Style pinStyle() {
+        return Style.DEFAULT;
     }
 
     @ConfigItem(
